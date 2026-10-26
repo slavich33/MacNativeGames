@@ -104,7 +104,7 @@ def build_pack(pack, out, variants, ch, env):
     for variant in variants:
         for suffix in ('_b.metal', '_b.json'): shutil.copy2(out/f'{variant}{suffix}', pack/f'{variant}{suffix}')
         indexes.setdefault(variant.split('-')[0], []).append(record(out, variant))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1,min(8,int(os.environ.get("TOTK_BUILD_JOBS","8")),os.cpu_count() or 4))) as pool:
         for problem in pool.map(lambda v: compile_metallib(pack, f'{v}_b', env), variants):
             if problem: print(f'no iOS metallib, the device compiles the source: {problem}')
     for shader, rows in indexes.items():

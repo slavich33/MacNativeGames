@@ -827,7 +827,7 @@ def prepare(romfs, output, translator, spirv_cross, version, shader_list=None, m
                 process.stdin.close(); process.wait()
 
     # At most 8 services, as compile_seed.py compiles: each translator holds its own working memory.
-    workers = max(1, min(8, os.cpu_count() or 4, len(by_key)))
+    workers = max(1, min(8, int(os.environ.get("TOTK_BUILD_JOBS", "8")), os.cpu_count() or 4, len(by_key)))
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
         for future in [pool.submit(worker) for _ in range(workers)]:
             future.result()

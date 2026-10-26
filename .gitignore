@@ -12,6 +12,16 @@ __pycache__/
 *.xcz
 *.bfttf
 *.sav
+*.ipa
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.pfx
+*.cer
+*.der
+*.pem
+/local/config.json
+/local/state/
 # build output (the work folder normally lives next to the card image)
 TOTK_build/
 BotW_build/

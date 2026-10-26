@@ -14,6 +14,7 @@
 #import "touch_pad.h"
 
 int totk_host_main(int argc, char **argv);
+void nvn_fps_lock_set(int fps);
 void runtime_ios_attach_layer(CAMetalLayer *layer, UIView *host);
 void runtime_ios_sync_drawable(UIView *host);
 void runtime_ios_sync_safe_area(UIView *host);
@@ -47,6 +48,7 @@ static NSString *seed_unpack(NSString *base, NSString *dest, void (^progress)(ui
     NSString *tmp = [dest stringByAppendingString:@".tmp"]; [fm removeItemAtPath:tmp error:nil];
     if (![fm createDirectoryAtPath:tmp withIntermediateDirectories:YES attributes:nil error:nil]) { if (f) fclose(f); return @"cannot make the folder"; }
     char magic[9]; NSString *why = nil; size_t cap = 1 << 20; uint8_t *buf = malloc(cap); uint64_t files = 0, last = 0;
+    if (!buf) { if (f) fclose(f); [fm removeItemAtPath:tmp error:nil]; return @"not enough memory to unpack"; }
     if (!take(magic, 9) || memcmp(magic, "TOTKPACK1", 9)) why = @"not a shader pack";
     while (!why) {
         uint16_t nl; if (!take(&nl, 2)) { why = @"truncated"; break; }
@@ -57,7 +59,9 @@ static NSString *seed_unpack(NSString *base, NSString *dest, void (^progress)(ui
         if (strchr(name, '/') || !strcmp(name, ".") || !strcmp(name, "..") || !take(&size, 8)) { why = @"bad entry"; break; }
         FILE *o = fopen([tmp stringByAppendingPathComponent:@(name)].fileSystemRepresentation, "wb"); if (!o) { why = @"cannot write"; break; }
         while (size && !why) { size_t n = size < cap ? (size_t)size : cap; if (!take(buf, n) || fwrite(buf, 1, n, o) != n) why = @"truncated or disk full"; size -= n; }
-        fclose(o); files++;
+        // Buffered writes can report success until fclose flushes the final bytes (for example, ENOSPC).
+        if (fclose(o) != 0 && !why) why = @"cannot finish writing the shader file";
+        files++;
         if (progress && done - last > (32u << 20)) { last = done; progress(done, total); }
     }
     free(buf); if (f) fclose(f);
@@ -291,14 +295,25 @@ static void audio_observe(void) {
 #endif
     setenv("TOTK_OPERATION_MODE","handheld",1);
 #endif
+    // Persist scene quality for launches from the Home Screen; an explicit developer launch still wins.
+    NSString *renderRes = [NSUserDefaults.standardUserDefaults stringForKey:@"TOTK_RENDER_RES"];
+    if (![@[@"960x540", @"1280x720"] containsObject:renderRes]) renderRes = @"1280x720";
+    setenv("TOTK_RENDER_RES",renderRes.UTF8String,0);
+    fprintf(stderr,"[totk] iOS scene resolution preference: %s\n",getenv("TOTK_RENDER_RES"));
     // Game language: the Settings app (Settings.bundle › TOTK_LANG) stores the choice in our defaults; empty means the
     // system language, which is what the runtime already follows. iOS 27 does not honour Info.plist LSEnvironment, so
     // the value must be applied here. overwrite=0 keeps devicectl --environment-variables winning when testing from the Mac.
     NSString *lang = [NSUserDefaults.standardUserDefaults stringForKey:@"TOTK_LANG"];
     if (lang.length>0&&lang.length<8) setenv("TOTK_LANG",lang.UTF8String,0);
-    // Frame rate: Settings.bundle › TOTK_PHONE_FPS, or the 60 / 30 button of the touch controls, which saves it here too.
-    NSString *fps = [NSUserDefaults.standardUserDefaults stringForKey:@"TOTK_PHONE_FPS"];
-    if ([fps isEqualToString:@"30"]) setenv("TOTK_PHONE_FPS","30",0);
+    // Personal build, requested 2026-10-26: a persistent 60 fps ceiling. Clear an older saved 30 fps choice;
+    // use the renderer's pacing lock, while the real-time game/cloth timestep continues to follow actual frames.
+    [NSUserDefaults.standardUserDefaults setObject:@"60" forKey:@"TOTK_PHONE_FPS"];
+    setenv("TOTK_PHONE_FPS","60",1);
+    setenv("TOTK_UNCAPPED_HZ","60",1);
+    setenv("TOTK_MFX","0",1);
+    runtime_phone_fps_set(60);
+    nvn_fps_lock_set(60);
+    fprintf(stderr,"[totk] local frame-rate lock: 60 fps; interpolation off; real-time timestep retained\n");
     setenv("TOTK_ROMFS_PATCHES",[res stringByAppendingPathComponent:@"romfs-patches"].fileSystemRepresentation,1);
     setenv("TOTK_ROMFS_PATCHES_OUT",[res stringByAppendingPathComponent:@"romfs-patches-out"].fileSystemRepresentation,1);
     setenv("TOTK_SHARED_FONTS",[res stringByAppendingPathComponent:@"shared-fonts"].fileSystemRepresentation,1);

@@ -61,7 +61,9 @@ class VisionOS(unittest.TestCase):
 
     def test_native_profile_uses_visionos_product_and_separate_cache(self):
         with tempfile.TemporaryDirectory() as d, patch.object(install_device, 'CACHE', Path(d)), \
-                patch.object(install_device, 'run'), patch.object(install_device.subprocess, 'run') as run:
+                patch.object(install_device, 'run'), \
+                patch.object(install_device, 'out', return_value=plistlib.dumps({'ProvisionedDevices': ['DEVICE']}).decode()), \
+                patch.object(install_device.subprocess, 'run') as run:
             run.return_value.returncode = 0
             for platform, sdk in [('ios', 'iphoneos'), ('visionos', 'xros')]:
                 prov, app = install_device.profile('TEAM', 'org.macnativegames.totk', 'DEVICE', platform)
@@ -69,6 +71,14 @@ class VisionOS(unittest.TestCase):
                 self.assertIn('platform: '+('visionOS' if sdk == 'xros' else 'iOS'), project.read_text())
                 self.assertEqual(app.parent.name, 'Debug-'+sdk)
                 self.assertEqual(prov, app/'embedded.mobileprovision')
+                command = run.call_args.args[0]
+                self.assertEqual(command[command.index('-target') + 1], 'TOTK')
+                self.assertEqual(command[command.index('-sdk') + 1], sdk)
+                self.assertEqual(command[command.index('-arch') + 1], 'arm64')
+                self.assertIn('SYMROOT='+str(app.parents[1]), command)
+                self.assertIn('OBJROOT='+str(app.parents[2]/'Intermediates.noindex'), command)
+                self.assertNotIn('-destination', command)
+                self.assertNotIn('-scheme', command)
 
     @unittest.skipUnless(sys.platform == 'darwin' and shutil.which('xcrun'), 'requires macOS SDK')
     def test_unavailable_metalfx_modes_stay_off_even_when_requested_by_environment(self):

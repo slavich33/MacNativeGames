@@ -134,6 +134,14 @@ static BOOL make_dir(NSString *path) {
 
 int main(int argc, char **argv) {
     @autoreleasepool {
+        /* Personal preset: cap real game frames at 60 with the measured-time game clock. */
+        setenv("TOTK_UNCAPPED", "1", 1);
+        setenv("TOTK_UNCAPPED_HZ", "60", 1);
+        setenv("TOTK_MFX", "0", 1);
+        setenv("TOTK_REALTIME", "1", 1);
+        setenv("TOTK_FPS60", "1", 1);
+        setenv("DM_PRESENT_INTERVAL", "game", 1);
+        unsetenv("DM_PRESENT_HZ");   // a profiling override would bypass TOTK_UNCAPPED_HZ
         NSString *root = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"totk"];
         NSString *binary = [root stringByAppendingPathComponent:@"build/totk-native"];
         /* --check (build_app.py, once after packaging): only look that the game is there and exit. The first run of a new

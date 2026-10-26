@@ -100,24 +100,17 @@ def main():
         # The Settings pane without Tears of the Kingdom's Full HD switch (main.m reads it for that game only).
         settings=gen/'Settings.bundle'; shutil.rmtree(settings,ignore_errors=True); shutil.copytree(ios/'Settings.bundle',settings)
         root=plistlib.loads((settings/'Root.plist').read_bytes()); specs=root['PreferenceSpecifiers']
-        at=next(i for i,s in enumerate(specs) if s.get('Key')=='TOTK_DOCKED')
-        del specs[at-1:at+1]   # the switch and its group
+        at=next((i for i,s in enumerate(specs) if s.get('Key')=='TOTK_DOCKED'),None)
+        if at is not None:   # the local Settings pane may omit the experimental switch already
+            start=at-1 if at and specs[at-1].get('Type')=='PSGroupSpecifier' else at
+            del specs[start:at+1]
         (settings/'Root.plist').write_bytes(plistlib.dumps(root))
         project=project.replace('      - Settings.bundle','      - path: Gen/Settings.bundle',1)
     elif a.version=='v143': project=project.replace('          - loader.c','          - loader.c\n          - game_patches.c')
     else: project=project.replace('          - loader.c','          - loader.c\n          - game_patches_v143.c')
     if not botw and a.version!='v0': project=project.replace('-I../build\n','-I../build -DTOTK_GAME_'+a.version.upper()+'=1\n')
-    # The home screen icon: the game's own, which the build took from its control data for the Mac app
-    # (build/AppIcon.icns, scripts/extract_app_icon.py), as a single-size asset catalog. Without it the app had none.
+    # Use bundle PNG icons below: actool needs a Simulator runtime even for this device-only build.
     icon=tree/'build/AppIcon.icns'; catalog=gen/'Assets.xcassets'; shutil.rmtree(catalog,ignore_errors=True)
-    if icon.is_file() and not vision:
-        appicon=catalog/'AppIcon.appiconset'; appicon.mkdir(parents=True)
-        (catalog/'Contents.json').write_text(json.dumps({'info':{'author':'xcode','version':1}}))
-        run(['sips','-s','format','png','-z','1024','1024',icon,'--out',appicon/'icon-1024.png'],tree,logs/'ios-icon.log',env)
-        (appicon/'Contents.json').write_text(json.dumps({'images':[{'filename':'icon-1024.png','idiom':'universal','platform':'ios','size':'1024x1024'}],
-                                                         'info':{'author':'xcode','version':1}}))
-        project=project.replace('      - path: Gen/embed.S\n','      - path: Gen/embed.S\n      - path: Gen/Assets.xcassets\n')
-        project=project.replace('      CODE_SIGN_STYLE: Manual\n','      CODE_SIGN_STYLE: Manual\n      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon\n')
     (ios/'project.generated.yml').write_text(project)
     # Build device dependencies separately: Homebrew's Mac archives cannot be linked into an iOS application.
     deps=tree/('build/xros-deps' if vision else 'build/ios-deps')
@@ -152,8 +145,10 @@ def main():
     frameworks=' '.join('-framework '+x for x in ['UIKit','Metal','MetalFX','Foundation','QuartzCore','ImageIO','CoreGraphics','CoreText','UniformTypeIdentifiers','CoreFoundation','AudioToolbox','GameController','AVFAudio','Security'])
     xcconfig.write_text(f'OTHER_LDFLAGS = $(inherited) {frameworks} Gen/deps/lib/libopus.a Gen/deps/lib/libvpx.a {flags}\n')
     run(['xcodegen','generate','--spec','project.generated.yml'],ios,logs/'xcodegen.log',env)
-    derived=tree/('build/xros-derived' if vision else 'build/ios-derived');run(['xcodebuild','-project','TOTKIOS.xcodeproj','-scheme','TOTKIOS','-configuration','Release',
-        '-destination','generic/platform='+('visionOS' if vision else 'iOS'),'-derivedDataPath',derived,'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY='],
+    derived=tree/('build/xros-derived' if vision else 'build/ios-derived')
+    run(['xcodebuild','-project','TOTKIOS.xcodeproj','-target','TOTKIOS','-configuration','Release','-jobs','2',
+         '-sdk',sdk_name,'-arch','arm64','SYMROOT='+str(derived/'Build/Products'),
+         'OBJROOT='+str(derived/'Build/Intermediates.noindex'),'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY='],
         ios,logs/f'xcodebuild-{a.platform}.log',env)
     app=derived/f'Build/Products/Release-{sdk_name}/TOTK.app'
     if not app.is_dir(): raise RuntimeError(f'Xcode did not produce {app}')
@@ -166,6 +161,15 @@ def main():
     if (app/'GameData').exists(): discard(app/'GameData')
     dest=out if out.suffix=='.app' else tree/'build/ios-payload/Payload/TOTK.app'
     discard(dest); copy_tree(app,dest)
+    if icon.is_file() and not vision:
+        for name,size in [('AppIcon60x60@2x',120),('AppIcon60x60@3x',180),('AppIcon76x76',76),
+                          ('AppIcon76x76@2x',152),('AppIcon83.5x83.5@2x',167)]:
+            run(['sips','-s','format','png','-z',size,size,icon,'--out',dest/(name+'.png')],
+                tree,logs/(name+'.log'),env)
+        info_path=dest/'Info.plist'; info=plistlib.loads(info_path.read_bytes())
+        info['CFBundleIcons']={'CFBundlePrimaryIcon':{'CFBundleIconFiles':['AppIcon60x60']}}
+        info['CFBundleIcons~ipad']={'CFBundlePrimaryIcon':{'CFBundleIconFiles':['AppIcon76x76','AppIcon83.5x83.5']}}
+        info_path.write_bytes(plistlib.dumps(info,fmt=plistlib.FMT_BINARY))
     res=dest/'GameData';res.mkdir(exist_ok=True)
     copy_tree(game_data,res/'game-data')   # TOTK_GAME_DATA (Sources/main.m)
     romfs=tree/f'extracted/{a.version}/romfs'
