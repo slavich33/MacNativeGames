@@ -17192,14 +17192,47 @@ int botw_wb_newer(const void *mem, uint64_t gen) {
    formats x 8 write masks) are built on 4 threads and added like the warm-up adds them (par_add, each thread its own
    batch, par_flush_thread), one key twice from two threads; then the folder is read back as a later start reads it,
    with files a cut-short write leaves, and every pipeline must come from its file without compiling
-   (MTLPipelineOptionFailOnBinaryArchiveMiss). The build folders the batches made must be gone. */
+   (MTLPipelineOptionFailOnBinaryArchiveMiss). The build folders the batches made must be gone. A forced late startup
+   cleanup while two batches overlap must keep their live folder; only the last batch may remove it. */
+static int par_probe_startup_cleanup(NSString *dir) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *owned = [dir stringByAppendingPathComponent:@"probe-owned"], *shared = [dir stringByAppendingPathComponent:@"probe-shared"];
+    NSString *stale = [owned stringByAppendingPathComponent:@"gpuarchiver-stale"], *other = [shared stringByAppendingPathComponent:@"gpuarchiver-shared"];
+    NSString *unrelated = [owned stringByAppendingPathComponent:@"keep-this-entry"], *live = [owned stringByAppendingPathComponent:@"gpuarchiver-live"];
+    for (NSString *path in @[stale, other, unrelated]) [fm createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
+    g_par_probe_ga_dirs = @[@{@"path": owned, @"own": @YES}, @{@"path": shared, @"own": @NO}];
+    par_open_dir(g_dev);
+    if ([fm fileExistsAtPath:stale] || ![fm fileExistsAtPath:other] || ![fm fileExistsAtPath:unrelated])
+        MDIE("pipeline archive probe: startup cleanup did not finish or removed unrelated/shared entries");
+    par_batch_begin();
+    [fm createDirectoryAtPath:live withIntermediateDirectories:YES attributes:nil error:nil];
+    dispatch_semaphore_t entered = dispatch_semaphore_create(0), leave = dispatch_semaphore_create(0);
+    dispatch_group_t workers = dispatch_group_create();
+    dispatch_group_async(workers, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        par_batch_begin(); dispatch_semaphore_signal(entered);
+        if (dispatch_semaphore_wait(leave, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC))) MDIE("pipeline archive probe: batch release timed out");
+        par_batch_end();
+    });
+    if (dispatch_semaphore_wait(entered, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC))) MDIE("pipeline archive probe: overlapping batch did not start");
+    // Force a delayed startup request while both batches are live: the old unconditional deletion removes live.
+    dispatch_sync(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ par_ga_cleanup_startup(); });
+    if (![fm fileExistsAtPath:live]) MDIE("pipeline archive probe: delayed startup cleanup removed an active batch folder");
+    par_batch_end();
+    if (![fm fileExistsAtPath:live]) MDIE("pipeline archive probe: first batch removed another batch's live folder");
+    dispatch_semaphore_signal(leave);
+    if (dispatch_group_wait(workers, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC))) MDIE("pipeline archive probe: final batch did not finish");
+    if ([fm fileExistsAtPath:live] || ![fm fileExistsAtPath:other] || ![fm fileExistsAtPath:unrelated])
+        MDIE("pipeline archive probe: final batch cleanup left its folder or removed unrelated/shared entries");
+    g_par_probe_ga_dirs = nil;   // all fixture workers joined; real Metal batches use the normal cache folders
+    return 6;
+}
 int mtl_probe_pipeline_archive(void) {
     NSString *dir = [NSTemporaryDirectory() stringByAppendingFormat:@"totk-probe-pipeline-archive-%d", getpid()];
     [NSFileManager.defaultManager removeItemAtPath:dir error:nil];
     setenv("TOTK_SHADER_CACHE", dir.fileSystemRepresentation, 1); setenv("TOTK_SHADER_SEED", "off", 1);
     mtl_init();
     if (![totk_rt_dir() isEqualToString:dir]) MDIE("pipeline archive probe: the cache folder was chosen before the probe (%s)", totk_rt_dir().UTF8String);
-    par_open_dir(g_dev);
+    int cleanup_checks = par_probe_startup_cleanup(dir);
     if (!g_par_on || g_par_valid) MDIE("pipeline archive probe: archive on %d, valid %d in an empty folder", g_par_on, g_par_valid);
     NSError *error = nil;
     id<MTLLibrary> lib = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nstruct V { float4 p [[position]]; };\n"
@@ -17265,5 +17298,5 @@ int mtl_probe_pipeline_archive(void) {
     }
     if (g_par_open.count != want) MDIE("pipeline archive probe: %lu files opened (want %lu)", (unsigned long)g_par_open.count, (unsigned long)want);
     [NSFileManager.defaultManager removeItemAtPath:dir error:nil];
-    return atomic_load(&built) + from_archive;
+    return cleanup_checks + atomic_load(&built) + from_archive;
 }

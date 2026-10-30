@@ -302,6 +302,19 @@ class ShaderKeyScope(unittest.TestCase):
     def tree(folder):
         return {p.name: p.read_bytes() for p in sorted(folder.iterdir()) if p.name != 'seed-manifest.json'}
 
+    def test_translation_worker_budget_respects_the_requested_limit_and_available_jobs(self):
+        real_pool = seed.concurrent.futures.ThreadPoolExecutor
+        for requested, expected in [('1', 1), ('2', 2), ('99', 3), ('0', 1)]:
+            with self.subTest(requested=requested), tempfile.TemporaryDirectory() as d, \
+                    mock.patch.dict(os.environ, {'TOTK_BUILD_JOBS': requested}), \
+                    mock.patch.object(seed.os, 'cpu_count', return_value=8), \
+                    mock.patch.object(seed.concurrent.futures, 'ThreadPoolExecutor', side_effect=real_pool) as pool:
+                root = Path(d)
+                manifest, asked, _ = self.prepare_with_service(root, root/'seed')
+                self.assertEqual(pool.call_args.args[0], expected)
+                self.assertEqual(manifest['shaders'], 3)
+                self.assertEqual(len(asked), 3)
+
     @staticmethod
     def deps(**answers):
         return json.dumps(answers, sort_keys=True, separators=(',', ':'))

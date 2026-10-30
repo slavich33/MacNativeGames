@@ -1,4 +1,19 @@
-# MacNativeGames
+# Zelda TOTK & BOTW — Native iOS / macOS Ports
+
+**The Legend of Zelda: Tears of the Kingdom (TOTK) and Breath of the Wild (BOTW)** — community native ARM64 ports for iPhone, iPad and Apple silicon Mac, using Metal graphics.
+
+Clone this source fork:
+
+```sh
+git clone https://github.com/slavich33/zelda-totk-botw-native-ios.git
+cd zelda-totk-botw-native-ios
+```
+
+This fork of [MacNativeGames](https://github.com/ly05010419/MacNativeGames) adds portable local build/install helpers, iOS frame-pacing and shader-seed/package stability changes. See [the build configuration guide](PERSONAL_BUILD.md), [`local/config.example.json`](local/config.example.json), and the tests in `tests/`. A 60 FPS setting is a target/preset; performance depends on the scene and device. The original upstream description and its platform/compatibility table follow below. Use your own game files and signing configuration.
+
+По-русски: нативные Zelda Tears of the Kingdom / Breath of the Wild для iOS, iPhone, iPad и Mac на Apple Silicon; инструменты сборки, установки и работы с шейдерным кешем. Исходные игры и ключи не распространяются.
+
+---
 
 <p align="center"><img src="docs/images/botw-ultrawide-mac.png" width="100%"></p>
 
